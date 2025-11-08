@@ -1,3 +1,12 @@
-
-export const USER_ID = 'USER_ME';
-export const USER_NAME = 'You';
+export const EXPENSE_CATEGORIES = [
+  'General',
+  'Food & Drink',
+  'Groceries',
+  'Transport',
+  'Housing',
+  'Utilities',
+  'Entertainment',
+  'Shopping',
+  'Travel',
+  'Health',
+];

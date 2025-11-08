@@ -1,18 +1,25 @@
-
-import React, { createContext, useContext, useState, ReactNode, useMemo } from 'react';
-import { Contact, Transaction } from '../types';
+import React, { createContext, useContext, ReactNode } from 'react';
 import { useLocalStorage } from '../hooks/useLocalStorage';
-import { USER_ID } from '../constants';
+import { Contact, Transaction, Group, SimplifiedDebt, SplitParticipant } from '../types';
 
 interface AppContextType {
   contacts: Contact[];
-  transactions: Transaction[];
   addContact: (name: string) => void;
-  addTransaction: (transaction: Omit<Transaction, 'id' | 'date'>) => void;
   getContactName: (id: string) => string;
-  calculateBalance: (contactId: string) => number;
+  
+  transactions: Transaction[];
+  addTransaction: (transaction: Omit<Transaction, 'id'>) => void;
+  updateTransaction: (updatedTransaction: Transaction) => void;
+  deleteTransaction: (transactionId: string) => void;
   settleUp: (contactId: string) => void;
-  getTransactionsForContact: (contactId: string) => Transaction[];
+
+  groups: Group[];
+  addGroup: (group: Omit<Group, 'id'>) => void;
+  updateGroup: (updatedGroup: Group) => void;
+  getGroup: (id: string) => Group | undefined;
+  calculateGroupBalances: (groupId: string) => SimplifiedDebt[];
+
+  calculateBalance: (contactId: string) => number;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -20,93 +27,151 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [contacts, setContacts] = useLocalStorage<Contact[]>('contacts', []);
   const [transactions, setTransactions] = useLocalStorage<Transaction[]>('transactions', []);
-  
+  const [groups, setGroups] = useLocalStorage<Group[]>('groups', []);
+
   const addContact = (name: string) => {
-    const newContact: Contact = { id: crypto.randomUUID(), name };
+    const newContact: Contact = {
+      id: new Date().toISOString() + Math.random(),
+      name,
+    };
     setContacts(prev => [...prev, newContact]);
   };
 
-  const addTransaction = (transaction: Omit<Transaction, 'id' | 'date'>) => {
-    const newTransaction: Transaction = {
-      ...transaction,
-      id: crypto.randomUUID(),
-      date: new Date().toISOString(),
-    };
-    setTransactions(prev => [...prev, newTransaction]);
-  };
-
   const getContactName = (id: string) => {
-    if (id === USER_ID) return 'You';
+    if (id === 'you') return 'You';
     return contacts.find(c => c.id === id)?.name || 'Unknown';
   };
 
-  const calculateBalance = (contactId: string): number => {
-    return transactions.reduce((acc, tx) => {
-      const userIsParticipant = tx.participants.some(p => p.contactId === USER_ID);
-      const contactIsParticipant = tx.participants.some(p => p.contactId === contactId);
+  const addTransaction = (transaction: Omit<Transaction, 'id'>) => {
+    const newTransaction: Transaction = {
+      id: new Date().toISOString() + Math.random(),
+      ...transaction,
+    };
+    setTransactions(prev => [newTransaction, ...prev]);
+  };
 
-      if (tx.paidById === USER_ID && contactIsParticipant) {
-        // You paid, and they participated -> they owe you
-        const participant = tx.participants.find(p => p.contactId === contactId);
-        acc += participant?.amount || 0;
-      } else if (tx.paidById === contactId && userIsParticipant) {
-        // They paid, and you participated -> you owe them
-        const participant = tx.participants.find(p => p.contactId === USER_ID);
-        acc -= participant?.amount || 0;
-      }
-      return acc;
-    }, 0);
+  const updateTransaction = (updatedTransaction: Transaction) => {
+    setTransactions(prev => prev.map(t => t.id === updatedTransaction.id ? updatedTransaction : t));
   };
   
-  const getTransactionsForContact = (contactId: string): Transaction[] => {
-    return transactions
-      .filter(tx => {
-        const userInvolved = tx.paidById === USER_ID || tx.participants.some(p => p.contactId === USER_ID);
-        const contactInvolved = tx.paidById === contactId || tx.participants.some(p => p.contactId === contactId);
-        return userInvolved && contactInvolved;
-      })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const deleteTransaction = (transactionId: string) => {
+    setTransactions(prev => prev.filter(t => t.id !== transactionId));
   };
 
   const settleUp = (contactId: string) => {
     const balance = calculateBalance(contactId);
     if (balance === 0) return;
 
-    if (balance > 0) { // They owe you
-      addTransaction({
-        description: `Settle up with ${getContactName(contactId)}`,
-        amount: balance,
-        paidById: contactId,
-        participants: [{ contactId: USER_ID, amount: balance }],
-      });
-    } else { // You owe them
-      addTransaction({
-        description: `Settle up with ${getContactName(contactId)}`,
-        amount: -balance,
-        paidById: USER_ID,
-        participants: [{ contactId: contactId, amount: -balance }],
-      });
-    }
+    const transaction: Omit<Transaction, 'id'> = {
+        description: "Settle Up",
+        amount: Math.abs(balance),
+        date: new Date().toISOString(),
+        paidById: balance < 0 ? 'you' : contactId,
+        splitBetween: balance < 0 ? [contactId] : ['you'],
+    };
+    addTransaction(transaction);
+  };
+  
+  const addGroup = (group: Omit<Group, 'id'>) => {
+    const newGroup: Group = {
+      id: new Date().toISOString() + Math.random(),
+      ...group,
+    };
+    setGroups(prev => [...prev, newGroup]);
   };
 
-  const contextValue = useMemo(() => ({
-    contacts,
-    transactions,
-    addContact,
-    addTransaction,
-    getContactName,
-    calculateBalance,
-    settleUp,
-    getTransactionsForContact,
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [contacts, transactions]);
-  
-  return <AppContext.Provider value={contextValue}>{children}</AppContext.Provider>;
+  const updateGroup = (updatedGroup: Group) => {
+    setGroups(prev => prev.map(g => g.id === updatedGroup.id ? updatedGroup : g));
+  };
+
+  const getGroup = (id: string) => {
+    return groups.find(g => g.id === id);
+  };
+
+  const calculateBalance = (contactId: string) => {
+    let balance = 0;
+    transactions.forEach(t => {
+      if (t.groupId) return; // Ignore group transactions for 1-on-1 balance
+
+      const participants = t.splitBetween;
+      if (!participants.includes('you') || !participants.includes(contactId)) return;
+
+      if (t.customSplits) {
+        if (t.paidById === 'you' && t.customSplits[contactId]) {
+          balance += t.customSplits[contactId];
+        } else if (t.paidById === contactId && t.customSplits['you']) {
+          balance -= t.customSplits['you'];
+        }
+      } else { // Equal split
+        const share = t.amount / participants.length;
+        if (t.paidById === 'you') {
+          balance += share;
+        } else if (t.paidById === contactId) {
+          balance -= share;
+        }
+      }
+    });
+    return balance;
+  };
+
+  const calculateGroupBalances = (groupId: string): SimplifiedDebt[] => {
+    const group = getGroup(groupId);
+    if (!group) return [];
+    const members: SplitParticipant[] = ['you', ...group.members];
+    const balances = new Map<SplitParticipant, number>(members.map(m => [m, 0]));
+
+    transactions.filter(t => t.groupId === groupId).forEach(t => {
+        const paidBy = t.paidById;
+        const totalPaid = balances.get(paidBy) ?? 0;
+        balances.set(paidBy, totalPaid + t.amount);
+
+        if (t.customSplits) {
+            t.splitBetween.forEach(participant => {
+                const share = t.customSplits![participant] ?? 0;
+                const currentOwed = balances.get(participant) ?? 0;
+                balances.set(participant, currentOwed - share);
+            });
+        } else {
+            const share = t.amount / t.splitBetween.length;
+            t.splitBetween.forEach(participant => {
+                const currentOwed = balances.get(participant) ?? 0;
+                balances.set(participant, currentOwed - share);
+            });
+        }
+    });
+
+    const debtors = Array.from(balances.entries()).filter(([, b]) => b < 0).map(([p, b]) => ({id: p, amount: -b}));
+    const creditors = Array.from(balances.entries()).filter(([, b]) => b > 0).map(([p, b]) => ({id: p, amount: b}));
+    const simplifiedDebts: SimplifiedDebt[] = [];
+
+    debtors.forEach(debtor => {
+        creditors.forEach(creditor => {
+            if (debtor.amount === 0 || creditor.amount === 0) return;
+            const payment = Math.min(debtor.amount, creditor.amount);
+            simplifiedDebts.push({ from: debtor.id, to: creditor.id, amount: payment });
+            debtor.amount -= payment;
+            creditor.amount -= payment;
+        });
+    });
+
+    return simplifiedDebts;
+  };
+
+  return (
+    <AppContext.Provider value={{
+      contacts, addContact, getContactName,
+      transactions, addTransaction, updateTransaction, deleteTransaction, settleUp,
+      groups, addGroup, updateGroup, getGroup, calculateGroupBalances,
+      calculateBalance
+    }}>
+      {children}
+    </AppContext.Provider>
+  );
 };
 
 export const useAppContext = () => {
   const context = useContext(AppContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useAppContext must be used within an AppProvider');
   }
   return context;

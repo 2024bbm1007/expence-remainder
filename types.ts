@@ -1,24 +1,31 @@
-
 export interface Contact {
   id: string;
   name: string;
 }
 
-export interface Participant {
-  contactId: string;
-  amount: number;
-}
+export type SplitParticipant = 'you' | string;
 
 export interface Transaction {
-  id: string;
+  id:string;
   description: string;
   amount: number;
   date: string;
-  paidById: string; // contactId or 'USER_ME'
-  participants: Participant[];
+  paidById: SplitParticipant;
+  splitBetween: SplitParticipant[];
+  customSplits?: { [participantId: string]: number };
+  groupId?: string | null;
+  category?: string;
+  receiptImage?: string; // Base64 encoded image
 }
 
-export enum SplitType {
-  EQUALLY = 'EQUALLY',
-  UNEQUALLY = 'UNEQUALLY',
+export interface Group {
+  id: string;
+  name:string;
+  members: string[]; // array of contactIds
+}
+
+export interface SimplifiedDebt {
+  from: string;
+  to: string;
+  amount: number;
 }

@@ -1,5 +1,4 @@
-
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { UsersIcon } from './icons/UsersIcon';
 
@@ -9,6 +8,7 @@ interface ContactListProps {
 
 export const ContactList: React.FC<ContactListProps> = ({ onSelectContact }) => {
   const { contacts, calculateBalance } = useAppContext();
+  const [searchTerm, setSearchTerm] = useState('');
 
   const totalBalance = contacts.reduce((acc, contact) => acc + calculateBalance(contact.id), 0);
   const totalOwedToYou = contacts.reduce((acc, contact) => {
@@ -19,6 +19,10 @@ export const ContactList: React.FC<ContactListProps> = ({ onSelectContact }) => 
     const balance = calculateBalance(contact.id);
     return balance < 0 ? acc + balance : acc;
   }, 0);
+
+  const filteredContacts = contacts.filter(contact =>
+    contact.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const BalanceSummary = () => (
     <div className="bg-white dark:bg-gray-800 shadow-md rounded-lg p-4 mb-6 text-sm">
@@ -47,7 +51,7 @@ export const ContactList: React.FC<ContactListProps> = ({ onSelectContact }) => 
     return (
       <li
         onClick={() => onSelectContact(contact.id)}
-        className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors duration-200"
+        className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-all duration-200"
       >
         <div className="flex items-center">
           <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center mr-4">
@@ -73,17 +77,28 @@ export const ContactList: React.FC<ContactListProps> = ({ onSelectContact }) => 
   };
 
   return (
-    <div className="p-4 md:p-6">
+    <div className="p-4 md:p-6 h-full overflow-y-auto">
       <BalanceSummary />
-      {contacts.length > 0 ? (
+       <div className="mb-4">
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search contacts..."
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+        />
+      </div>
+      {filteredContacts.length > 0 ? (
         <ul className="space-y-3">
-          {contacts.map(contact => <ContactItem key={contact.id} contact={contact} />)}
+          {filteredContacts.map(contact => <ContactItem key={contact.id} contact={contact} />)}
         </ul>
       ) : (
         <div className="text-center py-16 px-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm">
           <UsersIcon className="w-16 h-16 mx-auto text-gray-400 dark:text-gray-500" />
-          <h3 className="mt-4 text-lg font-semibold text-gray-800 dark:text-gray-200">No Contacts Yet</h3>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Add a contact to start splitting expenses.</p>
+          <h3 className="mt-4 text-lg font-semibold text-gray-800 dark:text-gray-200">No Contacts Found</h3>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            {searchTerm ? 'Try a different search term.' : 'Add a contact to start splitting expenses.'}
+          </p>
         </div>
       )}
     </div>

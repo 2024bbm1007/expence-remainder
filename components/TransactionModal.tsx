@@ -1,140 +1,153 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { USER_ID, USER_NAME } from '../constants';
-import { SplitType, Participant } from '../types';
+import { Transaction, Contact, SplitParticipant } from '../types';
+import { EXPENSE_CATEGORIES } from '../constants';
 
 interface TransactionModalProps {
   onClose: () => void;
+  contactId?: string;
+  groupId?: string;
+  transactionToEdit?: Transaction | null;
 }
 
-export const TransactionModal: React.FC<TransactionModalProps> = ({ onClose }) => {
-  const { contacts, addTransaction } = useAppContext();
-  const allPossiblePayers = useMemo(() => [{ id: USER_ID, name: USER_NAME }, ...contacts], [contacts]);
-
+export const TransactionModal: React.FC<TransactionModalProps> = ({ onClose, contactId, groupId, transactionToEdit }) => {
+  const { contacts, addTransaction, updateTransaction, getGroup, getContactName } = useAppContext();
   const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState<number | ''>('');
-  const [paidById, setPaidById] = useState(USER_ID);
-  const [splitType, setSplitType] = useState<SplitType>(SplitType.EQUALLY);
-  const [participants, setParticipants] = useState<string[]>(allPossiblePayers.map(p => p.id));
-  const [customSplits, setCustomSplits] = useState<Record<string, number | ''>>({});
-
-  const totalAmount = typeof amount === 'number' ? amount : 0;
+  const [amount, setAmount] = useState('');
+  const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
+  const [paidById, setPaidById] = useState<SplitParticipant>('you');
+  const [receiptImage, setReceiptImage] = useState<string | undefined>(undefined);
+  const [splitType, setSplitType] = useState<'equal' | 'unequal'>('equal');
+  const [customSplits, setCustomSplits] = useState<{ [key: string]: string }>({});
   
-  useEffect(() => {
-    // When participants change, reset custom splits
-    const initialSplits: Record<string, number | ''> = {};
-    allPossiblePayers.forEach(p => {
-      initialSplits[p.id] = '';
-    });
-    setCustomSplits(initialSplits);
-  }, [allPossiblePayers]);
+  const [isMounted, setIsMounted] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
 
-  const handleParticipantToggle = (id: string) => {
-    setParticipants(prev =>
-      prev.includes(id) ? prev.filter(pId => pId !== id) : [...prev, id]
-    );
+  const group = useMemo(() => groupId ? getGroup(groupId) : null, [groupId, getGroup]);
+  const contact = useMemo(() => contactId ? contacts.find(c => c.id === contactId) : null, [contactId, contacts]);
+
+  const participants = useMemo((): (Contact | {id: 'you', name: 'You'})[] => {
+    if (group) return [{id: 'you', name: 'You'}, ...contacts.filter(c => group.members.includes(c.id))];
+    if (contact) return [{id: 'you', name: 'You'}, contact];
+    if (transactionToEdit?.groupId) {
+        const editGroup = getGroup(transactionToEdit.groupId);
+        if (editGroup) return [{id: 'you', name: 'You'}, ...contacts.filter(c => editGroup.members.includes(c.id))];
+    }
+    return [{id: 'you', name: 'You'}];
+  }, [group, contact, contacts, transactionToEdit, getGroup]);
+
+  useEffect(() => {
+    if (transactionToEdit) {
+      setDescription(transactionToEdit.description);
+      setAmount(transactionToEdit.amount.toString());
+      setPaidById(transactionToEdit.paidById);
+      setCategory(transactionToEdit.category || EXPENSE_CATEGORIES[0]);
+      setReceiptImage(transactionToEdit.receiptImage);
+      if (transactionToEdit.customSplits) {
+        setSplitType('unequal');
+        const customSplitStrings: { [key: string]: string } = {};
+        for (const key in transactionToEdit.customSplits) {
+            customSplitStrings[key] = transactionToEdit.customSplits[key].toString();
+        }
+        setCustomSplits(customSplitStrings);
+      }
+    }
+    setIsMounted(true);
+  }, [transactionToEdit]);
+
+  const handleCustomSplitChange = (participantId: string, value: string) => {
+    setCustomSplits(prev => ({ ...prev, [participantId]: value }));
   };
   
-  const totalCustomSplit = useMemo(() => {
-    return participants.reduce((acc, id) => acc + (Number(customSplits[id]) || 0), 0);
-  }, [customSplits, participants]);
-
-  const isValid = useMemo(() => {
-    if (!description || totalAmount <= 0 || participants.length === 0) return false;
-    if (splitType === SplitType.UNEQUALLY) {
-      return Math.abs(totalAmount - totalCustomSplit) < 0.01;
+  const handleClose = () => {
+    setIsClosing(true);
+    setTimeout(() => onClose(), 300);
+  };
+  
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReceiptImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
-    return true;
-  }, [description, totalAmount, participants, splitType, totalCustomSplit]);
+  };
+
+  const totalCustomSplit = Object.values(customSplits).reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+  const numericAmount = parseFloat(amount) || 0;
+  const isCustomSplitValid = Math.abs(totalCustomSplit - numericAmount) < 0.01;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isValid) return;
+    if (description.trim() && numericAmount > 0 && (splitType === 'equal' || isCustomSplitValid)) {
+      const baseTransaction = {
+        description: description.trim(),
+        amount: numericAmount,
+        date: transactionToEdit?.date || new Date().toISOString(),
+        paidById: paidById,
+        splitBetween: participants.map(p => p.id),
+        groupId: groupId || transactionToEdit?.groupId || null,
+        category,
+        receiptImage,
+      };
 
-    let finalParticipants: Participant[] = [];
-    if (splitType === SplitType.EQUALLY) {
-      const splitAmount = totalAmount / participants.length;
-      finalParticipants = participants.map(id => ({ contactId: id, amount: splitAmount }));
-    } else {
-      finalParticipants = participants.map(id => ({ contactId: id, amount: Number(customSplits[id]) || 0 }));
+      const finalTransaction = splitType === 'unequal' 
+        ? { ...baseTransaction, customSplits: Object.fromEntries(Object.entries(customSplits).map(([k, v]) => [k, parseFloat(v) || 0])) }
+        : { ...baseTransaction, customSplits: undefined };
+
+      if (transactionToEdit) {
+        updateTransaction({ ...finalTransaction, id: transactionToEdit.id });
+      } else {
+        addTransaction(finalTransaction);
+      }
+      handleClose();
     }
-
-    addTransaction({ description, amount: totalAmount, paidById, participants: finalParticipants });
-    onClose();
   };
+
+  const formTitle = transactionToEdit ? 'Edit Expense' : (group ? `Add expense in "${group?.name}"` : 'Add an expense');
   
-  const getParticipantName = (id: string) => allPossiblePayers.find(p => p.id === id)?.name || 'Unknown';
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+    <div className={`fixed inset-0 bg-black flex items-center justify-center z-50 p-4 transition-opacity duration-300 ${isMounted && !isClosing ? 'bg-opacity-50' : 'bg-opacity-0'}`} onClick={handleClose}>
+      <div onClick={e => e.stopPropagation()} className={`bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md transform transition-all duration-300 ${isMounted && !isClosing ? 'opacity-100 scale-100' : 'opacity-0 scale-95'} flex flex-col`}>
         <div className="p-6 border-b dark:border-gray-700">
-          <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200">Add Expense</h2>
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200">{formTitle}</h2>
         </div>
-        <form onSubmit={handleSubmit} className="flex-grow overflow-y-auto">
-          <div className="p-6 space-y-4">
-            <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="Description (e.g., Lunch)" className="w-full p-3 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white" required/>
-            <div className="relative">
-                <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">₹</span>
-                <input type="number" value={amount} onChange={e => setAmount(e.target.value === '' ? '' : parseFloat(e.target.value))} placeholder="0.00" className="w-full p-3 pl-7 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white" required min="0.01" step="0.01"/>
-            </div>
-            
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
+            <input id="description" type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="Description" className="w-full px-4 py-3 border rounded-lg dark:bg-gray-700 dark:border-gray-600" autoFocus />
+            <input id="amount" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="₹0.00" className="w-full px-4 py-3 border rounded-lg dark:bg-gray-700 dark:border-gray-600" />
+            <select id="category" value={category} onChange={e => setCategory(e.target.value)} className="w-full px-4 py-3 border rounded-lg dark:bg-gray-700 dark:border-gray-600"><option disabled>Category</option>{EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+            <select id="paidBy" value={paidById} onChange={e => setPaidById(e.target.value)} className="w-full px-4 py-3 border rounded-lg dark:bg-gray-700 dark:border-gray-600">{participants.map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}</select>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Paid by</label>
-              <select value={paidById} onChange={e => setPaidById(e.target.value)} className="w-full p-3 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white">
-                {allPossiblePayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Receipt (optional)</label>
+              <input type="file" onChange={handleFileChange} accept="image/*" className="mt-1 w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+              {receiptImage && <img src={receiptImage} alt="receipt preview" className="mt-2 h-20 rounded-md"/>}
             </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Split between</label>
-              <div className="grid grid-cols-2 gap-2">
-                {allPossiblePayers.map(p => (
-                    <button type="button" key={p.id} onClick={() => handleParticipantToggle(p.id)}
-                      className={`p-2 text-sm rounded-lg border ${participants.includes(p.id) ? 'bg-accent text-white border-accent' : 'bg-gray-100 dark:bg-gray-700 dark:border-gray-600'}`}>
-                      {p.name}
-                    </button>
-                ))}
+              <div className="flex border border-gray-300 dark:border-gray-600 rounded-lg">
+                  <button type="button" onClick={() => setSplitType('equal')} className={`w-1/2 p-2 rounded-l-md ${splitType === 'equal' ? 'bg-accent text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>Split Equally</button>
+                  <button type="button" onClick={() => setSplitType('unequal')} className={`w-1/2 p-2 rounded-r-md ${splitType === 'unequal' ? 'bg-accent text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>Split Unequally</button>
               </div>
             </div>
-
-            <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
-                <button type="button" onClick={() => setSplitType(SplitType.EQUALLY)} className={`w-1/2 p-2 rounded-md font-semibold text-sm ${splitType === SplitType.EQUALLY ? 'bg-white dark:bg-gray-600 shadow' : ''}`}>Equally</button>
-                <button type="button" onClick={() => setSplitType(SplitType.UNEQUALLY)} className={`w-1/2 p-2 rounded-md font-semibold text-sm ${splitType === SplitType.UNEQUALLY ? 'bg-white dark:bg-gray-600 shadow' : ''}`}>Unequally</button>
-            </div>
-
-            {splitType === SplitType.EQUALLY && participants.length > 0 && (
-                <div className="text-center text-gray-600 dark:text-gray-400 p-2 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    ₹{totalAmount > 0 ? (totalAmount / participants.length).toFixed(2) : '0.00'} per person
-                </div>
+            {splitType === 'unequal' && (
+              <div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                  {participants.map(p => (
+                      <div key={p.id} className="flex items-center justify-between">
+                          <label htmlFor={`split-${p.id}`} className="text-sm">{p.name}</label>
+                          <input id={`split-${p.id}`} type="number" placeholder="₹0.00" value={customSplits[p.id] || ''} onChange={e => handleCustomSplitChange(p.id, e.target.value)} className="w-1/3 px-2 py-1 border rounded-md dark:bg-gray-600 dark:border-gray-500"/>
+                      </div>
+                  ))}
+                  <div className={`flex justify-between text-sm font-bold pt-2 border-t dark:border-gray-600 ${isCustomSplitValid ? 'text-positive' : 'text-negative'}`}>
+                      <span>{isCustomSplitValid ? 'Total matches' : 'Total differs'}</span>
+                      <span>₹{totalCustomSplit.toFixed(2)} of ₹{numericAmount.toFixed(2)}</span>
+                  </div>
+              </div>
             )}
-
-            {splitType === SplitType.UNEQUALLY && (
-                <div className="space-y-2">
-                    {participants.map(id => (
-                        <div key={id} className="flex items-center space-x-2">
-                            <label className="w-1/3 text-gray-700 dark:text-gray-300">{getParticipantName(id)}</label>
-                            <div className="relative flex-grow">
-                                <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">₹</span>
-                                <input type="number" placeholder="0.00" value={customSplits[id]}
-                                  onChange={e => setCustomSplits(prev => ({ ...prev, [id]: e.target.value === '' ? '' : parseFloat(e.target.value) }))}
-                                  className="w-full p-2 pl-7 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                />
-                            </div>
-                        </div>
-                    ))}
-                    <div className={`flex justify-between p-2 rounded-lg text-sm ${Math.abs(totalAmount - totalCustomSplit) < 0.01 ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'}`}>
-                        <span>Total: ₹{totalCustomSplit.toFixed(2)}</span>
-                        <span>Remaining: ₹{(totalAmount - totalCustomSplit).toFixed(2)}</span>
-                    </div>
-                </div>
-            )}
-          </div>
         </form>
-        <div className="p-6 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex justify-end space-x-3">
-          <button type="button" onClick={onClose} className="px-6 py-2 rounded-lg text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors">Cancel</button>
-          <button type="button" onClick={handleSubmit} disabled={!isValid} className="px-6 py-2 rounded-lg bg-accent text-white font-semibold hover:bg-secondary disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors">Save</button>
+        <div className="p-6 flex justify-end space-x-3 border-t dark:border-gray-700">
+          <button type="button" onClick={handleClose} className="px-6 py-2 rounded-lg bg-gray-200 dark:bg-gray-600">Cancel</button>
+          <button type="button" onClick={handleSubmit} disabled={!description.trim() || !amount || (splitType === 'unequal' && !isCustomSplitValid)} className="px-6 py-2 rounded-lg bg-accent text-white font-semibold disabled:bg-gray-400">{transactionToEdit ? 'Save Changes' : 'Add Expense'}</button>
         </div>
       </div>
     </div>
